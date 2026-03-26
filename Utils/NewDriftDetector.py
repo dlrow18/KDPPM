@@ -57,7 +57,7 @@ class PageHinkleyDriftDetector:
 @dataclass
 class NoveltyBufferManager:
 
-    min_total_unseen_samples: int = 10
+    min_total_unseen_samples: int = 20
     min_unseen_samples_per_class: int = 5
     max_total_unseen_samples: int = 5000
     max_unseen_samples_per_class: int = 1000

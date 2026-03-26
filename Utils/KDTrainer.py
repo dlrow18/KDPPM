@@ -4,6 +4,8 @@ from __future__ import annotations
 import copy
 from typing import Dict, Optional, Tuple
 
+from torch.utils.data import DataLoader, random_split
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -53,6 +55,92 @@ def zero_old_embedding_grads(student: nn.Module, n_old_tokens: int):
     """
     if student.embedding.weight.grad is not None:
         student.embedding.weight.grad[:n_old_tokens].zero_()
+
+
+def make_train_val_loader(
+    dataloader,
+    val_ratio: float = 0.2,
+    shuffle_train: bool = True,
+):
+    """Split a dataloader's dataset into train/val loaders.
+
+    Returns:
+        (train_loader, val_loader). val_loader is None when the dataset is too
+        small to form a non-empty validation set.
+    """
+    dataset = dataloader.dataset
+    dataset_size = len(dataset)
+
+    if dataset_size <= 1 or val_ratio <= 0:
+        train_loader = DataLoader(
+            dataset,
+            batch_size=dataloader.batch_size,
+            shuffle=shuffle_train,
+            num_workers=getattr(dataloader, "num_workers", 0),
+        )
+        return train_loader, None
+
+    val_size = int(dataset_size * val_ratio)
+    if val_size <= 0:
+        val_size = 1
+    train_size = dataset_size - val_size
+
+    if train_size <= 0:
+        train_size = dataset_size - 1
+        val_size = 1
+
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=dataloader.batch_size,
+        shuffle=shuffle_train,
+        num_workers=getattr(dataloader, "num_workers", 0),
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=dataloader.batch_size,
+        shuffle=False,
+        num_workers=getattr(dataloader, "num_workers", 0),
+    )
+    return train_loader, val_loader
+
+
+@torch.no_grad()
+def evaluate_adaptation(
+    student: nn.Module,
+    val_loader,
+    device: Optional[torch.device] = None,
+) -> Dict[str, float]:
+    """Evaluate adaptation phase on a validation split."""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    student = student.to(device)
+    student.eval()
+    ce_loss_fn = nn.CrossEntropyLoss()
+
+    total_ce = 0.0
+    total_n = 0
+    total_correct = 0
+
+    for s_inputs, s_labels, s_lengths in val_loader:
+        s_inputs = s_inputs.to(device)
+        s_labels = s_labels.to(device)
+
+        student_logits = student(s_inputs)
+        loss_ce = ce_loss_fn(student_logits, s_labels)
+
+        bs = s_labels.size(0)
+        total_ce += loss_ce.item() * bs
+        total_n += bs
+        total_correct += (student_logits.argmax(dim=1) == s_labels).sum().item()
+
+    return {
+        "val_ce_loss": total_ce / max(total_n, 1),
+        "val_acc": total_correct / max(total_n, 1),
+        "n_val_samples": total_n,
+    }
 
 
 def train_adaptation_epoch(
@@ -263,6 +351,9 @@ def incremental_kd_update(
     adaptation_lr: float = 3e-3,
     kd_lr: float = 1e-3,
     use_kd: bool = True,
+    adaptation_val_ratio: float = 0.2,
+    adaptation_patience: int = 2,
+    adaptation_min_delta: float = 1e-4,
     device: Optional[torch.device] = None,
 ):
     """
@@ -305,20 +396,90 @@ def incremental_kd_update(
     }
 
     # ===== Phase 1: Adaptation =====
-    for epoch in range(1, adaptation_epochs + 1):
-        student, stats = train_adaptation_epoch(
-            student=student,
-            student_loader=student_loader,
-            n_old_tokens=n_old_tokens,
-            lr=adaptation_lr,
-            device=device,
-        )
-        history["adaptation"].append(stats)
+    adaptation_train_loader, adaptation_val_loader = make_train_val_loader(
+        student_loader,
+        val_ratio=adaptation_val_ratio,
+        shuffle_train=True,
+    )
+
+    if adaptation_val_loader is None:
         print(
-            f"[Adaptation] epoch={epoch:03d} "
-            f"ce={stats['ce_loss']:.4f} "
-            f"n={stats['n_samples']}"
+            f"[Adaptation] validation split skipped; "
+            f"using all {len(adaptation_train_loader.dataset)} samples for training"
         )
+        for epoch in range(1, adaptation_epochs + 1):
+            student, stats = train_adaptation_epoch(
+                student=student,
+                student_loader=adaptation_train_loader,
+                n_old_tokens=n_old_tokens,
+                lr=adaptation_lr,
+                device=device,
+            )
+            history["adaptation"].append(stats)
+            print(
+                f"[Adaptation] epoch={epoch:03d} "
+                f"train_ce={stats['ce_loss']:.4f} "
+                f"n_train={stats['n_samples']}"
+            )
+    else:
+        print(
+            f"[Adaptation] split dataset: "
+            f"train={len(adaptation_train_loader.dataset)} val={len(adaptation_val_loader.dataset)}"
+        )
+        best_val_loss = float("inf")
+        best_state = None
+        bad_epochs = 0
+
+        for epoch in range(1, adaptation_epochs + 1):
+            student, train_stats = train_adaptation_epoch(
+                student=student,
+                student_loader=adaptation_train_loader,
+                n_old_tokens=n_old_tokens,
+                lr=adaptation_lr,
+                device=device,
+            )
+            val_stats = evaluate_adaptation(
+                student=student,
+                val_loader=adaptation_val_loader,
+                device=device,
+            )
+
+            stats = {**train_stats, **val_stats}
+            history["adaptation"].append(stats)
+
+            current_val_loss = val_stats["val_ce_loss"]
+            improved = current_val_loss < (best_val_loss - adaptation_min_delta)
+            if improved:
+                best_val_loss = current_val_loss
+                best_state = {
+                    k: v.detach().cpu().clone()
+                    for k, v in student.state_dict().items()
+                }
+                bad_epochs = 0
+            else:
+                bad_epochs += 1
+
+            print(
+                f"[Adaptation] epoch={epoch:03d} "
+                f"train_ce={train_stats['ce_loss']:.4f} "
+                f"val_ce={val_stats['val_ce_loss']:.4f} "
+                f"val_acc={val_stats['val_acc']:.4f} "
+                f"bad={bad_epochs}/{adaptation_patience}"
+            )
+
+            if bad_epochs >= adaptation_patience:
+                print(
+                    f"[Adaptation] early stopping at epoch={epoch:03d}; "
+                    f"best_val_ce={best_val_loss:.4f}"
+                )
+                break
+
+        if best_state is not None:
+            student.load_state_dict(best_state)
+            student = student.to(device)
+            print(
+                f"[Adaptation] restored best model with val_ce={best_val_loss:.4f}"
+            )
 
     # ===== Phase 2: Distillation =====
     if use_kd:

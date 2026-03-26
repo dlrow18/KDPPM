@@ -6,7 +6,7 @@ import torch
 from datetime import datetime
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
-
+'''
 class DynamicVocabManager:
     def __init__(self, pad_token="[PAD]"):
         # Input token vocabulary
@@ -15,6 +15,25 @@ class DynamicVocabManager:
         # Output label vocabulary
         self.label_vocab = {}
         self.pad_token = pad_token
+'''
+
+class DynamicVocabManager:
+    def __init__(self, pad_token="[PAD]", unk_token="[UNK]"):
+        # Input token vocabulary
+        self.pad_token = pad_token
+        self.unk_token = unk_token
+
+        self.token_vocab = {
+            self.pad_token: 0,
+            self.unk_token: 1,
+        }
+        self.pad_idx = self.token_vocab[self.pad_token]
+        self.unk_idx = self.token_vocab[self.unk_token]
+
+        # Output label vocabulary
+        self.label_vocab = {}
+
+
 
     def expand_token_vocab(self, token_lists):
         """Add new tokens to the vocabulary if they don't exist"""
@@ -43,6 +62,7 @@ class DynamicVocabManager:
 
         return len(new_labels) > 0  # Return whether vocab was expanded
 
+    '''
     def encode_inputs(self, token_lists, max_seq_len):
         """
         Args:
@@ -67,7 +87,49 @@ class DynamicVocabManager:
             pad_len = max_seq_len - len(idxs)
             batch_ids.append([self.pad_idx] * pad_len + idxs)
         return torch.tensor(batch_ids, dtype=torch.long), torch.tensor(lengths, dtype=torch.long)
+    '''
 
+    def encode_inputs(self, token_lists, max_seq_len, expand_vocab=True, unknown_to_unk=False):
+        """
+        Args:
+            token_lists: List[List[str]]
+            max_seq_len: int
+            expand_vocab: whether to expand token_vocab with unseen tokens
+            unknown_to_unk: if True, unseen tokens map to UNK instead of expanding
+        Returns:
+            input_ids: LongTensor [B, T]
+            lengths: LongTensor [B]
+        """
+        if expand_vocab:
+            self.expand_token_vocab(token_lists)
+
+        batch_ids = []
+        lengths = []
+
+        for seq in token_lists:
+            idxs = []
+            for tok in seq:
+                if tok in self.token_vocab:
+                    idxs.append(self.token_vocab[tok])
+                else:
+                    if unknown_to_unk:
+                        idxs.append(self.unk_idx)
+                    else:
+                        raise KeyError(f"Unknown token '{tok}' encountered while expand_vocab=False")
+
+            seq_len = min(len(idxs), max_seq_len)
+            lengths.append(seq_len)
+
+            if len(idxs) > max_seq_len:
+                idxs = idxs[-max_seq_len:]
+
+            pad_len = max_seq_len - len(idxs)
+            batch_ids.append([self.pad_idx] * pad_len + idxs)
+
+        return torch.tensor(batch_ids, dtype=torch.long), torch.tensor(lengths, dtype=torch.long)
+
+
+    '''
     def encode_labels(self, label_list):
         """
         Args:
@@ -80,18 +142,66 @@ class DynamicVocabManager:
         # one-hot encode labels for data augmentation in feature space
         one_hot_encoded_labels = np.eye(len(self.label_vocab))[idxs]
         return torch.tensor(one_hot_encoded_labels, dtype=torch.long)
+    '''
+
+    def encode_labels(self, label_list, expand_vocab=True, allow_unknown=False):
+        """
+        Args:
+            expand_vocab: whether to expand label_vocab with unseen labels
+            allow_unknown: if True, unseen labels are encoded as -1 (for inference-only use)
+        Returns:
+            labels: LongTensor [B, C] if all labels known
+                    or LongTensor [B] with -1 for unknown labels when allow_unknown=True
+        """
+        if expand_vocab:
+            self.expand_label_vocab(label_list)
+
+        idxs = []
+        has_unknown = False
+        for lbl in label_list:
+            if lbl in self.label_vocab:
+                idxs.append(self.label_vocab[lbl])
+            else:
+                if allow_unknown:
+                    idxs.append(-1)
+                    has_unknown = True
+                else:
+                    raise KeyError(f"Unknown label '{lbl}' encountered while expand_vocab=False")
+
+        if has_unknown:
+            return torch.tensor(idxs, dtype=torch.long)
+
+        one_hot_encoded_labels = np.eye(len(self.label_vocab))[idxs]
+        return torch.tensor(one_hot_encoded_labels, dtype=torch.long)
+
+
 
     def save_vocab(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, 'w') as f:
             json.dump({'token_vocab': self.token_vocab, 'label_vocab': self.label_vocab}, f)
 
+    '''
     def load_vocab(self, path):
         with open(path) as f:
             data = json.load(f)
         self.token_vocab = data['token_vocab']
         self.label_vocab = data['label_vocab']
         self.pad_idx = self.token_vocab.get(self.pad_token, 0)
+    '''
+
+    def load_vocab(self, path):
+        with open(path) as f:
+            data = json.load(f)
+
+        self.token_vocab = data['token_vocab']
+        self.label_vocab = data['label_vocab']
+
+        if self.unk_token not in self.token_vocab:
+            self.token_vocab[self.unk_token] = len(self.token_vocab)
+
+        self.pad_idx = self.token_vocab.get(self.pad_token, 0)
+        self.unk_idx = self.token_vocab[self.unk_token]
 
 
 class LogsDataLoader:
@@ -144,6 +254,7 @@ class LogsDataLoader:
         # print(f"Created {len(batches)} batches by {self.window_type}")
         return batches
 
+    '''
     def encode_and_prepare(self, df, batch_size=32, shuffle=True):
         # Get prefixes and next_act
         token_seqs = [row.split() for row in df['prefix'].values]
@@ -154,6 +265,42 @@ class LogsDataLoader:
         # Prepare DataLoader
         dataset = torch.utils.data.TensorDataset(input_tensor, label_tensor, lengths)
         loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0)
+        return loader
+    '''
+
+    def encode_and_prepare(
+            self,
+            df,
+            batch_size=32,
+            shuffle=True,
+            expand_token_vocab=True,
+            expand_label_vocab=True,
+            unknown_to_unk=False,
+            allow_unknown_labels=False,
+    ):
+        token_seqs = [row.split() for row in df['prefix'].values]
+        labels = df['next_act'].tolist()
+
+        input_tensor, lengths = self.vocab_mapper.encode_inputs(
+            token_seqs,
+            self.max_case_length,
+            expand_vocab=expand_token_vocab,
+            unknown_to_unk=unknown_to_unk,
+        )
+
+        label_tensor = self.vocab_mapper.encode_labels(
+            labels,
+            expand_vocab=expand_label_vocab,
+            allow_unknown=allow_unknown_labels,
+        )
+
+        dataset = torch.utils.data.TensorDataset(input_tensor, label_tensor, lengths)
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=0
+        )
         return loader
 
     def save_metadata(self):
@@ -166,6 +313,7 @@ class LogsDataLoader:
         with open(f"{self.dir_path}/metadata.json", 'w') as f:
             json.dump(meta, f, indent=2)
 
+    '''
     def load_metadata(self):
         with open(f"{self.dir_path}/metadata.json") as f:
             meta = json.load(f)
@@ -173,3 +321,18 @@ class LogsDataLoader:
         self.vocab_mapper.token_vocab = meta['token_vocab']
         self.vocab_mapper.label_vocab = meta['label_vocab']
         self.vocab_mapper.pad_idx = self.vocab_mapper.token_vocab.get(self.vocab_mapper.pad_token)
+        '''
+
+    def load_metadata(self):
+        with open(f"{self.dir_path}/metadata.json") as f:
+            meta = json.load(f)
+
+        self.max_case_length = meta['max_case_length']
+        self.vocab_mapper.token_vocab = meta['token_vocab']
+        self.vocab_mapper.label_vocab = meta['label_vocab']
+
+        if self.vocab_mapper.unk_token not in self.vocab_mapper.token_vocab:
+            self.vocab_mapper.token_vocab[self.vocab_mapper.unk_token] = len(self.vocab_mapper.token_vocab)
+
+        self.vocab_mapper.pad_idx = self.vocab_mapper.token_vocab.get(self.vocab_mapper.pad_token, 0)
+        self.vocab_mapper.unk_idx = self.vocab_mapper.token_vocab[self.vocab_mapper.unk_token]

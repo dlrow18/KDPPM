@@ -126,6 +126,7 @@ def main():
         print(f"\n=== Predicting window {i}/{len(test_batches)} - {win_key} ===")
 
         # Encode this window
+        '''
         win_loader = loader.encode_and_prepare(batch_df, batch_size=args.batch_size, shuffle=False)
 
         current_num_classes = model.num_classes
@@ -140,17 +141,34 @@ def main():
 
         if new_num_classes > model.num_classes:
             model.expand_num_classes(new_num_classes)
+        '''
+        win_loader = loader.encode_and_prepare(
+            batch_df,
+            batch_size=args.batch_size,
+            shuffle=False,
+            expand_token_vocab=False,
+            expand_label_vocab=False,
+            unknown_to_unk=True,
+            allow_unknown_labels=True,
+        )
+
+        print(f"[Before window] model_vocab={model.vocab_size}, model_classes={model.num_classes}, "
+              f"token_vocab={len(loader.vocab_mapper.token_vocab)}, label_vocab={len(loader.vocab_mapper.label_vocab)}")
 
         # Predict on this window
         win_acc, win_preds, win_gts = predict_model(model, win_loader, device=device)
 
-        print(f"[Window {win_key}] n={len(batch_df)}  acc={win_acc * 100:.2f}%")
+        print(f"[After window] model_vocab={model.vocab_size}, model_classes={model.num_classes}, "
+              f"token_vocab={len(loader.vocab_mapper.token_vocab)}, label_vocab={len(loader.vocab_mapper.label_vocab)}")
 
+
+        # print window accuracy + buffer size
+        print(f"[Window {win_key}] n={len(batch_df)}  acc={win_acc * 100:.2f}%")
 
         is_triggered, unseen_buffer_df, info = detector.update(win_key, batch_df, win_acc)
 
-        # print window accuracy + buffer size
         print(f"buffer_total={info['buffer_total']}")
+
 
         # print drift/trigger information when trigger_train=True
         if is_triggered:
@@ -162,44 +180,6 @@ def main():
             # TODO:
             # incremental_learning
 
-
-
-        '''
-        if info["novelty"]:
-            print(
-                f"[NOVELTY] unseen_labels={info['unseen_labels']} "
-                f"unseen_ratio={info['unseen_ratio_in_window']:.3f} "
-                f"buffer_added={info['buffer_added']} buffer_total={info['buffer_total']}"
-            )
-
-        if info["perf_drift"]:
-            print(
-                f"[PERF_DROP] cer={info['cer']:.4f} ref={info['perf_info'].get('reference_cer')} ph={info['perf_info'].get('ph_stat')}"
-            )
-
-        if trigger_train:
-            print(
-                f"[TRIGGER_TRAIN] reasons={info['trigger_reasons']} "
-                f"buffer_total={info['buffer_total']} per_class={info['buffer_per_class_counts']} "
-                f"first_novelty_window={info['first_novelty_window']}"
-            )
-            # TODO: 
-            # incremental_train(model, unseen_buffer_df, ...)
-            # detector.buffer.clear()
-        '''
-
-        '''
-        is_drift, reasons = drift_detector.update(
-            acc=win_acc,
-            new_classes_count=new_classes_count,
-            n_samples=len(batch_df),
-            win_key=win_key
-        )
-
-        if is_drift:
-            print(f"\n[DRIFT DETECTED @ {win_key}] Reasons: {reasons}")
-            print(f"   Current acc = {win_acc * 100:.2f}%, n={len(batch_df)}")
-        '''
 
         all_accs.append(win_acc)
         all_keys.append(win_key)

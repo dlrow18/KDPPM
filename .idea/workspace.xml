@@ -5,23 +5,15 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="19f1aa80-7682-4690-9cc4-16a9adb35a99" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/KDPPM.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/BaselineTest.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/DataPreProcess.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/DriftDetectorTest.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Model/LSTMClassifier.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/PreProcessing/DataProcesser.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/PreProcessing/LogsDataLoader.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Utils/DriftDetector.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Utils/NewDriftDetector.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/WindowTest.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/readme.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/DriftDetectorTest.py" beforeDir="false" afterPath="$PROJECT_DIR$/DriftDetectorTest.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/KDTest.py" beforeDir="false" afterPath="$PROJECT_DIR$/KDTest.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Model/LSTMClassifier.py" beforeDir="false" afterPath="$PROJECT_DIR$/Model/LSTMClassifier.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/PreProcessing/LogsDataLoader.py" beforeDir="false" afterPath="$PROJECT_DIR$/PreProcessing/LogsDataLoader.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Utils/KDTrainer.py" beforeDir="false" afterPath="$PROJECT_DIR$/Utils/KDTrainer.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Utils/NewDriftDetector.py" beforeDir="false" afterPath="$PROJECT_DIR$/Utils/NewDriftDetector.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/readme.md" beforeDir="false" afterPath="$PROJECT_DIR$/readme.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -51,7 +43,7 @@
   &quot;keyToString&quot;: {
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;last_opened_file_path&quot;: &quot;E:/Master/MA/Code/KDPPM&quot;,
+    &quot;last_opened_file_path&quot;: &quot;E:/Master/MA/Code/CIL2D-main&quot;,
     &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
 }</component>

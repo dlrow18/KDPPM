@@ -228,16 +228,18 @@ def main():
                 loader=loader,
                 old_token_vocab=old_token_vocab,
                 old_label_vocab=old_label_vocab,
-                #batch_size=args.batch_size,
-                batch_size=32,  # for small D_novel
-                adaptation_epochs=7,
+                batch_size=32,
+                adaptation_epochs=20,
                 kd_epochs=4,
                 lambda_kd=0.5,
                 temperature=2.0,
                 adaptation_lr=5e-3,
                 kd_lr=1e-3,
                 use_kd=True,
-                device=device,
+                adaptation_val_ratio=0.2,
+                adaptation_patience=3,
+                adaptation_min_delta=1e-3,
+                device=device
             )
 
             # ===== Step 3: replace deployed model =====

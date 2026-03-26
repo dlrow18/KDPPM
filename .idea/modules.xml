@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/KDPPM.iml" filepath="$PROJECT_DIR$/.idea/KDPPM.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/KDPPM-baseline.iml" filepath="$PROJECT_DIR$/.idea/KDPPM-baseline.iml" />
     </modules>
   </component>
 </project>

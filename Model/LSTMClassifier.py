@@ -193,6 +193,7 @@ def predict_model(model, test_dataloader, device=None):
     preds = torch.cat(preds) if preds else torch.tensor([])
     gts = torch.cat(gts) if gts else torch.tensor([])
     acc = float((preds == gts).float().mean().item()) if len(preds) else 0.0
+
     return acc, preds, gts
 
 
