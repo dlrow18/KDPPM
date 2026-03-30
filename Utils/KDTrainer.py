@@ -47,6 +47,14 @@ def set_distillation_trainable(student: nn.Module):
     for p in student.parameters():
         p.requires_grad = True
 
+def set_full_finetune_trainable(student: nn.Module):
+    """
+    Full-parameter finetuning on D_novel:
+      all student parameters trainable
+    """
+    for p in student.parameters():
+        p.requires_grad = True
+
 
 def zero_old_embedding_grads(student: nn.Module, n_old_tokens: int):
     """
@@ -204,6 +212,55 @@ def train_adaptation_epoch(
     return student, stats
 
 
+def train_full_ce_epoch(
+    student: nn.Module,
+    student_loader,
+    lr: float = 1e-3,
+    device: Optional[torch.device] = None,
+):
+    """
+    One epoch on D_novel:
+      L = CE
+    Update:
+      all parameters trainable
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    student = student.to(device)
+    student.train()
+
+    set_full_finetune_trainable(student)
+
+    optimizer = torch.optim.NAdam(student.parameters(), lr=lr)
+    ce_loss_fn = nn.CrossEntropyLoss()
+
+    total_ce = 0.0
+    total_n = 0
+
+    for s_inputs, s_labels, s_lengths in student_loader:
+        s_inputs = s_inputs.to(device)
+        s_labels = s_labels.to(device)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        student_logits = student(s_inputs)
+        loss_ce = ce_loss_fn(student_logits, s_labels)
+
+        loss_ce.backward()
+        optimizer.step()
+
+        bs = s_labels.size(0)
+        total_ce += loss_ce.item() * bs
+        total_n += bs
+
+    stats = {
+        "ce_loss": total_ce / max(total_n, 1),
+        "n_samples": total_n,
+    }
+    return student, stats
+
+
 def compute_old_class_kd_loss(
     student_logits: torch.Tensor,
     teacher_logits: torch.Tensor,
@@ -262,6 +319,45 @@ def build_student_teacher_loaders(
         allow_unknown_labels=True,
     )
     return student_loader, teacher_loader
+
+
+def build_stable_loaders(
+    kd_batch,
+    student_vocab_mapper,
+    teacher_vocab_mapper,
+    max_case_length: int,
+    batch_size: int = 32,
+):
+    """
+    stable side:
+      student uses stable_df
+      teacher uses stable_teacher_df
+    """
+    if len(kd_batch.stable_df) == 0:
+        return None, None
+
+    stable_student_loader = encode_df_with_given_vocab(
+        df=kd_batch.stable_df,
+        vocab_mapper=student_vocab_mapper,
+        max_case_length=max_case_length,
+        batch_size=batch_size,
+        shuffle=True,
+        expand_tokens=False,
+        expand_labels=False,
+        allow_unknown_labels=False,
+    )
+
+    stable_teacher_loader = encode_df_with_given_vocab(
+        df=kd_batch.stable_teacher_df,
+        vocab_mapper=teacher_vocab_mapper,
+        max_case_length=max_case_length,
+        batch_size=batch_size,
+        shuffle=False,
+        expand_tokens=False,
+        expand_labels=False,
+        allow_unknown_labels=False,
+    )
+    return stable_student_loader, stable_teacher_loader
 
 
 def train_kd_epoch(
@@ -336,6 +432,83 @@ def train_kd_epoch(
     return student, stats
 
 
+def train_stable_kd_epoch(
+    student: nn.Module,
+    teacher: nn.Module,
+    stable_student_loader,
+    stable_teacher_loader,
+    n_old_classes: int,
+    lambda_kd: float = 1.0,
+    temperature: float = 2.0,
+    lr: float = 1e-3,
+    device: Optional[torch.device] = None,
+) -> Tuple[nn.Module, Dict[str, float]]:
+    """
+    One epoch on D_stable:
+      L = CE + lambda_kd * KD(old-subspace)
+    """
+    if stable_student_loader is None or stable_teacher_loader is None:
+        return student, {
+            "ce_loss": 0.0,
+            "kd_loss": 0.0,
+            "total_loss": 0.0,
+            "n_samples": 0,
+        }
+
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    student = student.to(device)
+    teacher = teacher.to(device)
+    teacher.eval()
+    student.train()
+
+    optimizer = torch.optim.NAdam(student.parameters(), lr=lr)
+    ce_loss_fn = nn.CrossEntropyLoss()
+
+    total_ce = 0.0
+    total_kd = 0.0
+    total_loss = 0.0
+    total_n = 0
+
+    for (s_inputs, s_labels, _), (t_inputs, _, _) in zip(stable_student_loader, stable_teacher_loader):
+        s_inputs = s_inputs.to(device)
+        s_labels = s_labels.to(device)
+        t_inputs = t_inputs.to(device)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        student_logits = student(s_inputs)
+        with torch.no_grad():
+            teacher_logits = teacher(t_inputs)
+
+        loss_ce = ce_loss_fn(student_logits, s_labels)
+        loss_kd = compute_old_class_kd_loss(
+            student_logits=student_logits,
+            teacher_logits=teacher_logits,
+            n_old_classes=n_old_classes,
+            temperature=temperature,
+        )
+
+        loss = loss_ce + lambda_kd * loss_kd
+        loss.backward()
+        optimizer.step()
+
+        bs = s_labels.size(0)
+        total_ce += loss_ce.item() * bs
+        total_kd += loss_kd.item() * bs
+        total_loss += loss.item() * bs
+        total_n += bs
+
+    stats = {
+        "ce_loss": total_ce / max(total_n, 1),
+        "kd_loss": total_kd / max(total_n, 1),
+        "total_loss": total_loss / max(total_n, 1),
+        "n_samples": total_n,
+    }
+    return student, stats
+
+
 def incremental_kd_update(
     kd_batch,
     teacher,
@@ -351,6 +524,7 @@ def incremental_kd_update(
     adaptation_lr: float = 3e-3,
     kd_lr: float = 1e-3,
     use_kd: bool = True,
+    full_finetune_ce_only: bool = False,
     adaptation_val_ratio: float = 0.2,
     adaptation_patience: int = 2,
     adaptation_min_delta: float = 1e-4,
@@ -387,6 +561,19 @@ def incremental_kd_update(
         batch_size=batch_size,
     )
 
+    stable_student_loader, stable_teacher_loader = build_stable_loaders(
+        kd_batch=kd_batch,
+        student_vocab_mapper=student_vocab_mapper,
+        teacher_vocab_mapper=teacher_vocab_mapper,
+        max_case_length=loader.max_case_length,
+        batch_size=batch_size,
+    )
+
+    print(
+        f"[KD Data] novel_n={len(kd_batch.novel_df)} | "
+        f"stable_n={len(kd_batch.stable_df)}"
+    )
+
     n_old_classes = len(old_label_vocab)
     n_old_tokens = len(old_token_vocab)
 
@@ -394,6 +581,12 @@ def incremental_kd_update(
         "adaptation": [],
         "distillation": [],
     }
+
+
+    if full_finetune_ce_only:
+        print("[Update Mode] full-parameter CE finetuning on D_novel")
+    else:
+        print("[Update Mode] adaptation (partial trainable) on D_novel")
 
     # ===== Phase 1: Adaptation =====
     adaptation_train_loader, adaptation_val_loader = make_train_val_loader(
@@ -408,16 +601,24 @@ def incremental_kd_update(
             f"using all {len(adaptation_train_loader.dataset)} samples for training"
         )
         for epoch in range(1, adaptation_epochs + 1):
-            student, stats = train_adaptation_epoch(
-                student=student,
-                student_loader=adaptation_train_loader,
-                n_old_tokens=n_old_tokens,
-                lr=adaptation_lr,
-                device=device,
-            )
+            if full_finetune_ce_only:
+                student, stats = train_full_ce_epoch(
+                    student=student,
+                    student_loader=adaptation_train_loader,
+                    lr=adaptation_lr,
+                    device=device,
+                )
+            else:
+                student, stats = train_adaptation_epoch(
+                    student=student,
+                    student_loader=adaptation_train_loader,
+                    n_old_tokens=n_old_tokens,
+                    lr=adaptation_lr,
+                    device=device,
+                )
             history["adaptation"].append(stats)
             print(
-                f"[Adaptation] epoch={epoch:03d} "
+                f"[Phase1-CE] epoch={epoch:03d} "
                 f"train_ce={stats['ce_loss']:.4f} "
                 f"n_train={stats['n_samples']}"
             )
@@ -431,13 +632,21 @@ def incremental_kd_update(
         bad_epochs = 0
 
         for epoch in range(1, adaptation_epochs + 1):
-            student, train_stats = train_adaptation_epoch(
-                student=student,
-                student_loader=adaptation_train_loader,
-                n_old_tokens=n_old_tokens,
-                lr=adaptation_lr,
-                device=device,
-            )
+            if full_finetune_ce_only:
+                student, train_stats = train_full_ce_epoch(
+                    student=student,
+                    student_loader=adaptation_train_loader,
+                    lr=adaptation_lr,
+                    device=device,
+                )
+            else:
+                student, train_stats = train_adaptation_epoch(
+                    student=student,
+                    student_loader=adaptation_train_loader,
+                    n_old_tokens=n_old_tokens,
+                    lr=adaptation_lr,
+                    device=device,
+                )
             val_stats = evaluate_adaptation(
                 student=student,
                 val_loader=adaptation_val_loader,
@@ -460,7 +669,7 @@ def incremental_kd_update(
                 bad_epochs += 1
 
             print(
-                f"[Adaptation] epoch={epoch:03d} "
+                f"[Phase1-CE] epoch={epoch:03d} "
                 f"train_ce={train_stats['ce_loss']:.4f} "
                 f"val_ce={val_stats['val_ce_loss']:.4f} "
                 f"val_acc={val_stats['val_acc']:.4f} "
@@ -486,24 +695,32 @@ def incremental_kd_update(
         set_distillation_trainable(student)
 
         for epoch in range(1, kd_epochs + 1):
-            student, stats = train_kd_epoch(
+            student, stable_stats = train_stable_kd_epoch(
                 student=student,
                 teacher=teacher,
-                student_loader=student_loader,
-                teacher_loader=teacher_loader,
+                stable_student_loader=stable_student_loader,
+                stable_teacher_loader=stable_teacher_loader,
                 n_old_classes=n_old_classes,
                 lambda_kd=lambda_kd,
                 temperature=temperature,
                 lr=kd_lr,
                 device=device,
             )
+
+            stats = {
+                "stable_ce_loss": stable_stats["ce_loss"],
+                "stable_kd_loss": stable_stats["kd_loss"],
+                "stable_total_loss": stable_stats["total_loss"],
+                "stable_n": stable_stats["n_samples"],
+            }
             history["distillation"].append(stats)
+
             print(
-                f"[KD Train] epoch={epoch:03d} "
-                f"ce={stats['ce_loss']:.4f} "
-                f"kd={stats['kd_loss']:.4f} "
-                f"total={stats['total_loss']:.4f} "
-                f"n={stats['n_samples']}"
+                f"[KD Train] epoch={epoch:03d} | "
+                f"stable: ce={stats['stable_ce_loss']:.4f} "
+                f"kd={stats['stable_kd_loss']:.4f} "
+                f"total={stats['stable_total_loss']:.4f} "
+                f"n={stats['stable_n']}"
             )
     else:
         print("[KD Train] skipped (use_kd=False)")

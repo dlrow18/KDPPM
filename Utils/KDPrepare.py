@@ -17,6 +17,8 @@ UNK_TOKEN = "[UNK]"
 class IncrementalKDBatch:
     novel_df: pd.DataFrame
     teacher_df: pd.DataFrame
+    stable_df: pd.DataFrame
+    stable_teacher_df: pd.DataFrame
     new_tokens: List[str]
     new_labels: List[str]
 
@@ -74,16 +76,48 @@ def build_teacher_aligned_df(
     return df
 
 
+def build_stable_df(
+    trigger_window_df: pd.DataFrame,
+    old_token_vocab: Dict[str, int],
+    old_label_vocab: Dict[str, int],
+) -> pd.DataFrame:
+    """
+    D_stable:
+      prefix contains only old tokens
+      and next_act is an old label
+    """
+    stable_rows = []
+
+    for _, row in trigger_window_df.iterrows():
+        prefix = str(row["prefix"])
+        label = str(row["next_act"])
+
+        toks = prefix.split()
+        prefix_all_old = all(tok in old_token_vocab for tok in toks)
+        label_old = label in old_label_vocab
+
+        if prefix_all_old and label_old:
+            stable_rows.append(row)
+
+    if len(stable_rows) == 0:
+        return trigger_window_df.iloc[0:0].copy()
+
+    return pd.DataFrame(stable_rows).reset_index(drop=True)
+
+
 def prepare_novel_kd_batch(
     unseen_buffer_df: pd.DataFrame,
+    trigger_window_df: pd.DataFrame,
     old_token_vocab: Dict[str, int],
     old_label_vocab: Dict[str, int],
     unk_token: str = UNK_TOKEN,
 ) -> IncrementalKDBatch:
     """
     Build:
-      - novel_df: raw student-side data
-      - teacher_df: teacher-aligned data with unseen tokens -> [UNK]
+      - novel_df: raw student-side D_novel
+      - teacher_df: teacher-aligned D_novel with unseen tokens -> [UNK]
+      - stable_df: D_stable from current trigger window
+      - stable_teacher_df: teacher-aligned stable data (usually same as stable_df)
       - new_tokens/new_labels
     """
     novel_df = unseen_buffer_df.copy().reset_index(drop=True)
@@ -100,13 +134,26 @@ def prepare_novel_kd_batch(
         unk_token=unk_token,
     )
 
+    stable_df = build_stable_df(
+        trigger_window_df=trigger_window_df,
+        old_token_vocab=old_token_vocab,
+        old_label_vocab=old_label_vocab,
+    )
+
+    stable_teacher_df = build_teacher_aligned_df(
+        novel_df=stable_df,
+        old_token_vocab=old_token_vocab,
+        unk_token=unk_token,
+    )
+
     return IncrementalKDBatch(
         novel_df=novel_df,
         teacher_df=teacher_df,
+        stable_df=stable_df,
+        stable_teacher_df=stable_teacher_df,
         new_tokens=new_tokens,
         new_labels=new_labels,
     )
-
 
 '''
 def encode_df_with_given_vocab(

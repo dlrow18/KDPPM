@@ -5,15 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="19f1aa80-7682-4690-9cc4-16a9adb35a99" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/DriftDetectorTest.py" beforeDir="false" afterPath="$PROJECT_DIR$/DriftDetectorTest.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/KDTest.py" beforeDir="false" afterPath="$PROJECT_DIR$/KDTest.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Model/LSTMClassifier.py" beforeDir="false" afterPath="$PROJECT_DIR$/Model/LSTMClassifier.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/PreProcessing/LogsDataLoader.py" beforeDir="false" afterPath="$PROJECT_DIR$/PreProcessing/LogsDataLoader.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Utils/KDPrepare.py" beforeDir="false" afterPath="$PROJECT_DIR$/Utils/KDPrepare.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Utils/KDTrainer.py" beforeDir="false" afterPath="$PROJECT_DIR$/Utils/KDTrainer.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Utils/NewDriftDetector.py" beforeDir="false" afterPath="$PROJECT_DIR$/Utils/NewDriftDetector.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/readme.md" beforeDir="false" afterPath="$PROJECT_DIR$/readme.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

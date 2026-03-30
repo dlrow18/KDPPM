@@ -187,6 +187,7 @@ def main():
             # ===== Step 1: prepare D_novel for KD =====
             kd_batch = prepare_novel_kd_batch(
                 unseen_buffer_df=unseen_buffer_df,
+                trigger_window_df=batch_df,
                 old_token_vocab=old_token_vocab,
                 old_label_vocab=old_label_vocab,
                 unk_token=UNK_TOKEN,
@@ -233,9 +234,10 @@ def main():
                 kd_epochs=4,
                 lambda_kd=0.5,
                 temperature=2.0,
-                adaptation_lr=5e-3,
+                adaptation_lr=2e-3,
                 kd_lr=1e-3,
                 use_kd=True,
+                full_finetune_ce_only=True,
                 adaptation_val_ratio=0.2,
                 adaptation_patience=3,
                 adaptation_min_delta=1e-3,
