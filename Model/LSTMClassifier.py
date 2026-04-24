@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
+from sklearn.metrics import precision_recall_fscore_support
 
 # Basic LSTM for next-activity prediction
 class LSTMClassifier(nn.Module):
@@ -75,6 +76,26 @@ def _labels_to_index(labels: torch.Tensor) -> torch.Tensor:
     if labels.ndim == 2:
         return labels.argmax(dim=1)
     return labels
+
+def compute_prf1_weighted_sklearn(preds: torch.Tensor, gts: torch.Tensor):
+    """
+    Compute weighted Precision / Recall / F1 using sklearn.
+    Unknown label (-1) is treated as a normal class (thus always wrong).
+    """
+    if len(preds) == 0 or len(gts) == 0:
+        return 0.0, 0.0, 0.0
+
+    preds_np = preds.detach().cpu().numpy()
+    gts_np = gts.detach().cpu().numpy()
+
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        gts_np,
+        preds_np,
+        average="weighted",
+        zero_division=0
+    )
+
+    return precision, recall, f1
 
 
 @torch.no_grad()
@@ -192,7 +213,10 @@ def predict_model(model, test_dataloader, device=None):
 
     preds = torch.cat(preds) if preds else torch.tensor([])
     gts = torch.cat(gts) if gts else torch.tensor([])
-    acc = float((preds == gts).float().mean().item()) if len(preds) else 0.0
+    #acc = float((preds == gts).float().mean().item()) if len(preds) else 0.0
+    correct = (preds == gts).sum().item()
+    total = len(gts)
+    acc = correct / total if total > 0 else 0.0
 
     return acc, preds, gts
 

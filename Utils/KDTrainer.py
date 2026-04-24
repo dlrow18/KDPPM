@@ -627,6 +627,7 @@ def incremental_kd_update(
             f"[Adaptation] split dataset: "
             f"train={len(adaptation_train_loader.dataset)} val={len(adaptation_val_loader.dataset)}"
         )
+
         best_val_loss = float("inf")
         best_state = None
         bad_epochs = 0
@@ -689,6 +690,7 @@ def incremental_kd_update(
             print(
                 f"[Adaptation] restored best model with val_ce={best_val_loss:.4f}"
             )
+
 
     # ===== Phase 2: Distillation =====
     if use_kd:

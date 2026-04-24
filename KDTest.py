@@ -2,14 +2,88 @@ import os
 import argparse
 import torch
 import copy
+import pandas as pd
 
 from PreProcessing.LogsDataLoader import LogsDataLoader
-from Model.LSTMClassifier import LSTMClassifier, train_model, predict_model
+from Model.LSTMClassifier import LSTMClassifier, train_model, predict_model, compute_prf1_weighted_sklearn
 # from Utils.DriftDetector import PageHinkleyDriftDetector
 # from Utils.DriftDetector import ADWINDriftDetector
 from Utils.NewDriftDetector import PageHinkleyDriftDetector, NoveltyBufferManager, DriftDetector
 from Utils.KDPrepare import UNK_TOKEN, prepare_novel_kd_batch, build_teacher_student_models
 from Utils.KDTrainer import incremental_kd_update
+
+# functions for recording results to Excel
+def _str2bool(v):
+    if isinstance(v, bool):
+        return v
+    v = str(v).strip().lower()
+    if v in ("true", "1", "yes", "y", "t"):
+        return True
+    if v in ("false", "0", "no", "n", "f"):
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {v}")
+
+
+def save_window_metrics_to_excel(
+    records,
+    dataset_name: str,
+    excel_path: str,
+    sheet_name: str = "all_windows",
+):
+    """
+    Save one dataset's window-level records into a shared Excel file.
+
+    Behavior:
+    - If the Excel file does not exist, create it.
+    - If it exists, preserve all other datasets' rows.
+    - Replace only the rows of the current dataset_name.
+    """
+
+    if not records:
+        print("[Excel] No records to save.")
+        return
+
+    os.makedirs(os.path.dirname(excel_path) or ".", exist_ok=True)
+
+    new_df = pd.DataFrame(records)
+
+    preferred_cols = [
+        "dataset",
+        "window_index",
+        "window_id",
+        "n_samples",
+        "unseen_count",
+        "unseen_ratio",
+        "acc",
+        "precision",
+        "recall",
+        "f1",
+    ]
+    existing_cols = [c for c in preferred_cols if c in new_df.columns]
+    other_cols = [c for c in new_df.columns if c not in existing_cols]
+    new_df = new_df[existing_cols + other_cols]
+
+    if os.path.exists(excel_path):
+        try:
+            old_df = pd.read_excel(excel_path, sheet_name=sheet_name)
+        except Exception:
+            old_df = pd.DataFrame()
+
+        if not old_df.empty and "dataset" in old_df.columns:
+            old_df = old_df[old_df["dataset"] != dataset_name]
+
+        all_windows_df = pd.concat([old_df, new_df], ignore_index=True)
+    else:
+        all_windows_df = new_df.copy()
+
+    sort_cols = [c for c in ["dataset", "window_index"] if c in all_windows_df.columns]
+    if sort_cols:
+        all_windows_df = all_windows_df.sort_values(sort_cols).reset_index(drop=True)
+
+    with pd.ExcelWriter(excel_path, engine="openpyxl", mode="w") as writer:
+        all_windows_df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+    print(f"[Excel] Saved dataset '{dataset_name}' to {excel_path} (sheet: {sheet_name})")
 
 
 def main():
@@ -27,8 +101,10 @@ def main():
     ap.add_argument("--hidden_dim", type=int, default=128)
     ap.add_argument("--out_dir", type=str, default="./runs/baseline")
     ap.add_argument("--device", type=str, default=None)
-    ap.add_argument("--window_type", type=str, default=None, choices=[None, "day", "week", "month"],
-                    help="Split TEST into fixed time windows (CIL2D-style)")
+    ap.add_argument("--window_type", type=str, default=None, choices=[None, "day", "week", "month"])
+    ap.add_argument("--save_excel", type=_str2bool, default=False)
+    ap.add_argument("--excel_path", type=str, default="./runs/window_metrics.xlsx")
+
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -70,10 +146,10 @@ def main():
     ph = PageHinkleyDriftDetector(burn_in_windows=6, lambda_ph=0.05)
 
     buf = NoveltyBufferManager(
-        min_total_unseen_samples=30,
-        min_unseen_samples_per_class=2,
+        min_total_unseen_samples=5,
+        min_unseen_samples_per_class=5,
         max_total_unseen_samples=5000,
-        max_unseen_samples_per_class=1000,
+        max_unseen_samples_per_class=2000,
         min_unseen_ratio_in_window=0.03,
         max_wait_windows_since_first_novelty=6
     )
@@ -128,16 +204,23 @@ def main():
     all_preds, all_gts = [], []
     all_accs, all_keys = [], []
 
+    window_records = []
+
     for i, (win_key, batch_df) in enumerate(test_batches.items(), start=1):
         print(f"\n=== Predicting window {i}/{len(test_batches)} - {win_key} ===")
 
         # Encode this window
-        '''
-        win_loader = loader.encode_and_prepare(batch_df, batch_size=args.batch_size, shuffle=False)
+        ''' 
+        win_loader = loader.encode_and_prepare(
+            batch_df,
+            batch_size=args.batch_size,
+            shuffle=False,
+            expand_token_vocab=True,
+            expand_label_vocab=True,
+            unknown_to_unk=False,
+            allow_unknown_labels=False,
+        )
 
-        current_num_classes = model.num_classes
-        new_num_classes = len(loader.vocab_mapper.label_vocab)
-        new_classes_count = new_num_classes - current_num_classes
 
         new_vocab_size = len(loader.vocab_mapper.token_vocab)
         new_num_classes = len(loader.vocab_mapper.label_vocab)
@@ -158,23 +241,43 @@ def main():
             allow_unknown_labels=True,
         )
 
+
         #print(f"[Before window] model_vocab={model.vocab_size}, model_classes={model.num_classes}, "
               #f"token_vocab={len(loader.vocab_mapper.token_vocab)}, label_vocab={len(loader.vocab_mapper.label_vocab)}")
 
         # Predict on this window
         win_acc, win_preds, win_gts = predict_model(model, win_loader, device=device)
 
+        win_p, win_r, win_f1 = compute_prf1_weighted_sklearn(win_preds, win_gts)
+
 
         #print(f"[After window] model_vocab={model.vocab_size}, model_classes={model.num_classes}, "
               #f"token_vocab={len(loader.vocab_mapper.token_vocab)}, label_vocab={len(loader.vocab_mapper.label_vocab)}")
 
         # print window accuracy + buffer size
-        print(f"[Window {win_key}] n={len(batch_df)}  acc={win_acc * 100:.2f}%")
+        #print(f"[Window {win_key}] n={len(batch_df)}  acc={win_acc * 100:.2f}%")
+        print(
+            f"[Window {win_key}] n={len(batch_df)} "
+            f"acc={win_acc * 100:.2f}% | P={win_p * 100:.2f}% | R={win_r * 100:.2f}% | F1={win_f1 * 100:.2f}%"
+        )
 
         is_triggered, unseen_buffer_df, info = detector.update(win_key, batch_df, win_acc)
 
         print(f"buffer_total={info['buffer_total']}")
 
+        # Record window-level metrics and info for Excel
+        window_records.append({
+            "dataset": args.dataset,
+            "window_index": i,
+            "window_id": str(win_key),
+            "n_samples": int(len(batch_df)),
+            "unseen_count": int(info["unseen_count_in_window"]),
+            "unseen_ratio": float(info["unseen_ratio_in_window"]),
+            "acc": float(win_acc),
+            "precision": float(win_p),
+            "recall": float(win_r),
+            "f1": float(win_f1),
+        })
 
 
         # print drift/trigger information when trigger_train=True
@@ -238,7 +341,7 @@ def main():
                 kd_lr=1e-3,
                 use_kd=True,
                 full_finetune_ce_only=True,
-                adaptation_val_ratio=0.2,
+                adaptation_val_ratio=0.1,
                 adaptation_patience=3,
                 adaptation_min_delta=1e-3,
                 device=device
@@ -270,15 +373,35 @@ def main():
         import numpy as np
         overall_acc = float((np.array(all_preds) == np.array(all_gts)).mean()) if len(all_gts) else 0.0
         print(f"\nOverall accuracy (micro): {overall_acc * 100:.2f}%")
+
+        all_preds_tensor = torch.stack(all_preds) if len(all_preds) > 0 else torch.tensor([], dtype=torch.long)
+        all_gts_tensor = torch.stack(all_gts) if len(all_gts) > 0 else torch.tensor([], dtype=torch.long)
+
+        overall_p, overall_r, overall_f1 = compute_prf1_weighted_sklearn(all_preds_tensor, all_gts_tensor)
+
+        print(f"Overall Precision: {overall_p * 100:.2f}%")
+        print(f"Overall Recall   : {overall_r * 100:.2f}%")
+        print(f"Overall F1       : {overall_f1 * 100:.2f}%")
+
     except Exception:
         pass
+
+
+    # Save window-level metrics to Excel
+    if args.save_excel:
+        save_window_metrics_to_excel(
+            records=window_records,
+            dataset_name=args.dataset,
+            excel_path=args.excel_path,
+            sheet_name="all_windows",
+        )
 
     # Save checkpoint + vocab
     ckpt_path = os.path.join(args.out_dir, f"{args.dataset}_baseline.pt")
     model.save_model(ckpt_path)
     loader.vocab_mapper.save_vocab(
         os.path.join(args.out_dir, f"{args.dataset}_vocab.json"))
-    print("Saved:", ckpt_path)
+    # print("Saved:", ckpt_path)
 
 
 if __name__ == "__main__":
