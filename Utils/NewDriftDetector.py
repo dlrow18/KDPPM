@@ -193,6 +193,16 @@ class DriftDetector:
     ph: PageHinkleyDriftDetector
     buffer: NoveltyBufferManager
 
+    def update_known_events(self, known_events: Set[str]):
+        """
+        Update the known event set after model update.
+
+        After calling this, unseen detection becomes relative to the
+        updated model knowledge (not the initial training set).
+        """
+        self.known_train_events = set(known_events)
+
+
     def update(self, window_key: str, batch_df: pd.DataFrame, acc: float) -> Tuple[bool, pd.DataFrame, Dict[str, Any]]:
 
         n = int(len(batch_df))

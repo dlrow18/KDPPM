@@ -155,63 +155,6 @@ def prepare_novel_kd_batch(
         new_labels=new_labels,
     )
 
-'''
-def encode_df_with_given_vocab(
-    df: pd.DataFrame,
-    vocab_mapper,
-    max_case_length: int,
-    batch_size: int = 32,
-    shuffle: bool = True,
-    expand_tokens: bool = True,
-    expand_labels: bool = True,
-) -> DataLoader:
-    """
-    Encode df using the provided vocab_mapper.
-
-    For student:
-      expand_tokens=True, expand_labels=True
-
-    For teacher:
-      expand_tokens=False, expand_labels=False
-      (teacher should only see aligned prefixes and old labels space)
-    """
-    token_seqs = [row.split() for row in df["prefix"].astype(str).tolist()]
-    labels = df["next_act"].astype(str).tolist()
-
-    if expand_tokens:
-        vocab_mapper.expand_token_vocab(token_seqs)
-    if expand_labels:
-        vocab_mapper.expand_label_vocab(labels)
-
-    batch_ids = []
-    lengths = []
-    for seq in token_seqs:
-        idxs = []
-        for tok in seq:
-            if tok in vocab_mapper.token_vocab:
-                idxs.append(vocab_mapper.token_vocab[tok])
-            else:
-                # only valid for teacher side if unk already exists
-                idxs.append(vocab_mapper.token_vocab[UNK_TOKEN])
-
-        seq_len = min(len(idxs), max_case_length)
-        lengths.append(seq_len)
-
-        if len(idxs) > max_case_length:
-            idxs = idxs[-max_case_length:]
-
-        pad_len = max_case_length - len(idxs)
-        batch_ids.append([vocab_mapper.pad_idx] * pad_len + idxs)
-
-    label_idxs = [vocab_mapper.label_vocab[y] for y in labels]
-    label_tensor = torch.tensor(label_idxs, dtype=torch.long)
-
-    input_tensor = torch.tensor(batch_ids, dtype=torch.long)
-    length_tensor = torch.tensor(lengths, dtype=torch.long)
-
-    dataset = TensorDataset(input_tensor, label_tensor, length_tensor)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=0)
-    '''
 
 def encode_df_with_given_vocab(
     df: pd.DataFrame,

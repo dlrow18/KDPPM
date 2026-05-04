@@ -12,6 +12,7 @@ from Utils.NewDriftDetector import PageHinkleyDriftDetector, NoveltyBufferManage
 from Utils.KDPrepare import UNK_TOKEN, prepare_novel_kd_batch, build_teacher_student_models
 from Utils.KDTrainer import incremental_kd_update
 
+'''
 # functions for recording results to Excel
 def _str2bool(v):
     if isinstance(v, bool):
@@ -22,6 +23,7 @@ def _str2bool(v):
     if v in ("false", "0", "no", "n", "f"):
         return False
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {v}")
+'''
 
 
 def save_window_metrics_to_excel(
@@ -54,6 +56,7 @@ def save_window_metrics_to_excel(
         "n_samples",
         "unseen_count",
         "unseen_ratio",
+        "unseen_event_ratio",
         "acc",
         "precision",
         "recall",
@@ -102,7 +105,7 @@ def main():
     ap.add_argument("--out_dir", type=str, default="./runs/baseline")
     ap.add_argument("--device", type=str, default=None)
     ap.add_argument("--window_type", type=str, default=None, choices=[None, "day", "week", "month"])
-    ap.add_argument("--save_excel", type=_str2bool, default=False)
+    ap.add_argument("--save_excel", type=bool, default=False)
     ap.add_argument("--excel_path", type=str, default="./runs/window_metrics.xlsx")
 
     args = ap.parse_args()
@@ -146,11 +149,11 @@ def main():
     ph = PageHinkleyDriftDetector(burn_in_windows=6, lambda_ph=0.05)
 
     buf = NoveltyBufferManager(
-        min_total_unseen_samples=5,
-        min_unseen_samples_per_class=5,
+        min_total_unseen_samples=1,
+        min_unseen_samples_per_class=1,
         max_total_unseen_samples=5000,
         max_unseen_samples_per_class=2000,
-        min_unseen_ratio_in_window=0.03,
+        min_unseen_ratio_in_window=0.001,
         max_wait_windows_since_first_novelty=6
     )
 
@@ -183,6 +186,149 @@ def main():
     )
     '''
 
+    # function to compute unseen event ratio in a batch_df given the label_vocab snapshot
+    def compute_unseen_event_ratio_like_detector(batch_df, known_events):
+        """
+        Event-level unseen ratio using the same known-event reference as DriftDetector.
+
+        Definition:
+            unseen_event_ratio =
+            (# unseen events in prefix tokens + next_act) /
+            (# total events in prefix tokens + next_act)
+
+        This is aligned with unseen_ratio, which marks a prefix as unseen if either:
+            - its prefix contains unseen tokens, or
+            - its next_act is unseen.
+        """
+        total_events = 0
+        unseen_events = 0
+
+        # Count events inside prefixes
+        for prefix in batch_df["prefix"].astype(str).tolist():
+            for act in prefix.split():
+                total_events += 1
+                if act not in known_events:
+                    unseen_events += 1
+
+        # Count next_act as the target event of each prefix
+        for act in batch_df["next_act"].astype(str).tolist():
+            total_events += 1
+            if act not in known_events:
+                unseen_events += 1
+
+        return unseen_events / total_events if total_events > 0 else 0.0
+
+    def subset_metrics(preds, gts, mask):
+        """
+        Compute acc / weighted P/R/F1 on a subset.
+        """
+        mask = torch.tensor(mask, dtype=torch.bool)
+
+        n = int(mask.sum().item())
+        if n == 0:
+            return {
+                "n": 0,
+                "acc": None,
+                "precision": None,
+                "recall": None,
+                "f1": None,
+            }
+
+        sub_preds = preds[mask]
+        sub_gts = gts[mask]
+
+        acc = float((sub_preds == sub_gts).sum().item() / n)
+        p, r, f1 = compute_prf1_weighted_sklearn(sub_preds, sub_gts)
+
+        return {
+            "n": n,
+            "acc": acc,
+            "precision": float(p),
+            "recall": float(r),
+            "f1": float(f1),
+        }
+
+    def overall_subset_metrics(pred_list, gt_list):
+        if len(gt_list) == 0:
+            return {
+                "n": 0,
+                "acc": None,
+                "precision": None,
+                "recall": None,
+                "f1": None,
+            }
+
+        preds_tensor = torch.stack(pred_list)
+        gts_tensor = torch.stack(gt_list)
+
+        n = len(gt_list)
+        acc = float((preds_tensor == gts_tensor).sum().item() / n)
+        p, r, f1 = compute_prf1_weighted_sklearn(preds_tensor, gts_tensor)
+
+        return {
+            "n": n,
+            "acc": acc,
+            "precision": float(p),
+            "recall": float(r),
+            "f1": float(f1),
+        }
+
+
+    def build_unseen_event_eval_masks(batch_df, current_known_events, learned_novel_events):
+        """
+        Split window samples into evaluation groups.
+
+        1. current_unseen_target:
+           target is not known before this window update.
+
+        2. learned_novel_target:
+           target was once novel, but has already been learned.
+
+        3. novel_context_old_target:
+           prefix contains a learned novel event, but target is old/known.
+
+        4. old_target:
+           target is currently known.
+        """
+        next_acts = batch_df["next_act"].astype(str).tolist()
+        prefixes = batch_df["prefix"].astype(str).tolist()
+
+        current_unseen_target_mask = [
+            y not in current_known_events
+            for y in next_acts
+        ]
+
+        old_target_mask = [
+            y in current_known_events
+            for y in next_acts
+        ]
+
+        learned_novel_target_mask = [
+            (y in learned_novel_events) and (y in current_known_events)
+            for y in next_acts
+        ]
+
+        prefix_has_learned_novel_mask = []
+        for p in prefixes:
+            toks = p.split()
+            prefix_has_learned_novel_mask.append(
+                any(tok in learned_novel_events for tok in toks)
+            )
+
+        novel_context_old_target_mask = [
+            prefix_has_novel and old_target
+            for prefix_has_novel, old_target in zip(
+                prefix_has_learned_novel_mask,
+                old_target_mask
+            )
+        ]
+
+        return {
+            "current_unseen_target": current_unseen_target_mask,
+            "learned_novel_target": learned_novel_target_mask,
+            "novel_context_old_target": novel_context_old_target_mask,
+        }
+
     # Train
     model, stats = train_model(
         model=model,
@@ -196,6 +342,7 @@ def main():
     old_token_vocab = copy.deepcopy(loader.vocab_mapper.token_vocab)
     old_label_vocab = copy.deepcopy(loader.vocab_mapper.label_vocab)
 
+    learned_novel_events = set()
 
     # Test by fixed time windows
     test_batches = loader.create_batches(test_df)
@@ -204,33 +351,27 @@ def main():
     all_preds, all_gts = [], []
     all_accs, all_keys = [], []
 
+    all_learned_novel_target_preds = []
+    all_learned_novel_target_gts = []
+
+    all_novel_context_old_target_preds = []
+    all_novel_context_old_target_gts = []
+
     window_records = []
 
     for i, (win_key, batch_df) in enumerate(test_batches.items(), start=1):
         print(f"\n=== Predicting window {i}/{len(test_batches)} - {win_key} ===")
 
-        # Encode this window
-        ''' 
-        win_loader = loader.encode_and_prepare(
-            batch_df,
-            batch_size=args.batch_size,
-            shuffle=False,
-            expand_token_vocab=True,
-            expand_label_vocab=True,
-            unknown_to_unk=False,
-            allow_unknown_labels=False,
+
+        known_events_before_window = set(detector.known_train_events)
+
+        eval_masks = build_unseen_event_eval_masks(
+            batch_df=batch_df,
+            current_known_events=known_events_before_window,
+            learned_novel_events=learned_novel_events,
         )
 
-
-        new_vocab_size = len(loader.vocab_mapper.token_vocab)
-        new_num_classes = len(loader.vocab_mapper.label_vocab)
-
-        if new_vocab_size > model.vocab_size:
-            model.expand_vocab(new_vocab_size)
-
-        if new_num_classes > model.num_classes:
-            model.expand_num_classes(new_num_classes)
-        '''
+        # Encode this window
         win_loader = loader.encode_and_prepare(
             batch_df,
             batch_size=args.batch_size,
@@ -250,6 +391,43 @@ def main():
 
         win_p, win_r, win_f1 = compute_prf1_weighted_sklearn(win_preds, win_gts)
 
+        learned_novel_target_metrics = subset_metrics(
+            win_preds,
+            win_gts,
+            eval_masks["learned_novel_target"],
+        )
+
+        novel_context_old_target_metrics = subset_metrics(
+            win_preds,
+            win_gts,
+            eval_masks["novel_context_old_target"],
+        )
+
+        learned_mask = torch.tensor(
+            eval_masks["learned_novel_target"],
+            dtype=torch.bool
+        )
+
+        novel_context_mask = torch.tensor(
+            eval_masks["novel_context_old_target"],
+            dtype=torch.bool
+        )
+
+        if learned_mask.sum().item() > 0:
+            all_learned_novel_target_preds.extend(list(win_preds[learned_mask]))
+            all_learned_novel_target_gts.extend(list(win_gts[learned_mask]))
+
+        if novel_context_mask.sum().item() > 0:
+            all_novel_context_old_target_preds.extend(list(win_preds[novel_context_mask]))
+            all_novel_context_old_target_gts.extend(list(win_gts[novel_context_mask]))
+
+        current_unseen_target_n = int(sum(eval_masks["current_unseen_target"]))
+        current_unseen_target_ratio = (
+            current_unseen_target_n / len(batch_df)
+            if len(batch_df) > 0
+            else 0.0
+        )
+
 
         #print(f"[After window] model_vocab={model.vocab_size}, model_classes={model.num_classes}, "
               #f"token_vocab={len(loader.vocab_mapper.token_vocab)}, label_vocab={len(loader.vocab_mapper.label_vocab)}")
@@ -261,22 +439,56 @@ def main():
             f"acc={win_acc * 100:.2f}% | P={win_p * 100:.2f}% | R={win_r * 100:.2f}% | F1={win_f1 * 100:.2f}%"
         )
 
+        print(
+            f"[Unseen Eval] "
+            f"current_unseen_target_n={current_unseen_target_n} "
+            f"ratio={current_unseen_target_ratio:.4f} | "
+            f"learned_novel_target: n={learned_novel_target_metrics['n']} "
+            f"acc={learned_novel_target_metrics['acc']} "
+            f"recall={learned_novel_target_metrics['recall']} "
+            f"f1={learned_novel_target_metrics['f1']} | "
+            f"novel_context_old_target: n={novel_context_old_target_metrics['n']} "
+            f"acc={novel_context_old_target_metrics['acc']}"
+        )
+
+
         is_triggered, unseen_buffer_df, info = detector.update(win_key, batch_df, win_acc)
+
+        unseen_event_ratio = compute_unseen_event_ratio_like_detector(
+            batch_df=batch_df,
+            known_events=detector.known_train_events,
+        )
 
         print(f"buffer_total={info['buffer_total']}")
 
         # Record window-level metrics and info for Excel
+
         window_records.append({
             "dataset": args.dataset,
             "window_index": i,
             "window_id": str(win_key),
             "n_samples": int(len(batch_df)),
-            "unseen_count": int(info["unseen_count_in_window"]),
-            "unseen_ratio": float(info["unseen_ratio_in_window"]),
             "acc": float(win_acc),
             "precision": float(win_p),
             "recall": float(win_r),
             "f1": float(win_f1),
+            "unseen_count": int(info["unseen_count_in_window"]),
+            "unseen_ratio": float(info["unseen_ratio_in_window"]),
+            "unseen_event_ratio": float(unseen_event_ratio),  # event-level unseen ratio based on old label vocab
+            "current_unseen_target_n": int(current_unseen_target_n),
+            "current_unseen_target_ratio": float(current_unseen_target_ratio),
+
+            "learned_novel_target_n": learned_novel_target_metrics["n"],
+            "learned_novel_target_acc": learned_novel_target_metrics["acc"],
+            "learned_novel_target_precision": learned_novel_target_metrics["precision"],
+            "learned_novel_target_recall": learned_novel_target_metrics["recall"],
+            "learned_novel_target_f1": learned_novel_target_metrics["f1"],
+
+            "novel_context_old_target_n": novel_context_old_target_metrics["n"],
+            "novel_context_old_target_acc": novel_context_old_target_metrics["acc"],
+            "novel_context_old_target_precision": novel_context_old_target_metrics["precision"],
+            "novel_context_old_target_recall": novel_context_old_target_metrics["recall"],
+            "novel_context_old_target_f1": novel_context_old_target_metrics["f1"],
         })
 
 
@@ -295,6 +507,9 @@ def main():
                 old_label_vocab=old_label_vocab,
                 unk_token=UNK_TOKEN,
             )
+
+            learned_novel_events.update(kd_batch.new_tokens)
+            learned_novel_events.update(kd_batch.new_labels)
 
             #print(f"[KD Prep] D_novel={len(kd_batch.novel_df)}")
             #print(f"[KD Prep] new_tokens={kd_batch.new_tokens}")
@@ -357,6 +572,15 @@ def main():
             old_token_vocab = copy.deepcopy(loader.vocab_mapper.token_vocab)
             old_label_vocab = copy.deepcopy(loader.vocab_mapper.label_vocab)
 
+            '''
+            current_known_events = set(old_token_vocab.keys()) - {
+                loader.vocab_mapper.pad_token,
+                loader.vocab_mapper.unk_token,
+            }
+
+            detector.update_known_events(current_known_events)
+            '''
+
             detector.buffer.clear()
 
             print("[KD Update] model replaced by student.")
@@ -382,6 +606,45 @@ def main():
         print(f"Overall Precision: {overall_p * 100:.2f}%")
         print(f"Overall Recall   : {overall_r * 100:.2f}%")
         print(f"Overall F1       : {overall_f1 * 100:.2f}%")
+
+        overall_learned_novel_target_metrics = overall_subset_metrics(
+            all_learned_novel_target_preds,
+            all_learned_novel_target_gts,
+        )
+
+        overall_novel_context_old_target_metrics = overall_subset_metrics(
+            all_novel_context_old_target_preds,
+            all_novel_context_old_target_gts,
+        )
+
+        # ==== append overall summary row ====
+        window_records.append({
+            "dataset": args.dataset,
+            "window_index": len(test_batches) + 1,
+            "window_id": "overall",
+            "n_samples": len(all_gts),
+
+            "unseen_count": None,
+            "unseen_ratio": None,
+            "unseen_event_ratio": None,
+
+            "acc": float(overall_acc),
+            "precision": float(overall_p),
+            "recall": float(overall_r),
+            "f1": float(overall_f1),
+
+            "learned_novel_target_n": overall_learned_novel_target_metrics["n"],
+            "learned_novel_target_acc": overall_learned_novel_target_metrics["acc"],
+            "learned_novel_target_precision": overall_learned_novel_target_metrics["precision"],
+            "learned_novel_target_recall": overall_learned_novel_target_metrics["recall"],
+            "learned_novel_target_f1": overall_learned_novel_target_metrics["f1"],
+
+            "novel_context_old_target_n": overall_novel_context_old_target_metrics["n"],
+            "novel_context_old_target_acc": overall_novel_context_old_target_metrics["acc"],
+            "novel_context_old_target_precision": overall_novel_context_old_target_metrics["precision"],
+            "novel_context_old_target_recall": overall_novel_context_old_target_metrics["recall"],
+            "novel_context_old_target_f1": overall_novel_context_old_target_metrics["f1"],
+        })
 
     except Exception:
         pass
