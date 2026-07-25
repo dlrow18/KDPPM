@@ -225,3 +225,38 @@ def build_unseen_event_eval_masks(batch_df, current_known_events, learned_novel_
         "learned_novel_target": learned_novel_target_mask,
         "novel_context_old_target": novel_context_old_target_mask,
     }
+
+def compute_uhs(
+    learned_novel_target_recall,
+    novel_context_old_target_acc,
+    alpha=0.5,
+):
+    """
+    Compute the Unseen-event Handling Score.
+
+    Rules:
+    - both components available:
+        weighted combination
+    - only learned-novel-target recall available:
+        use recall
+    - only novel-context-old-target accuracy available:
+        use accuracy
+    - neither available:
+        return None
+    """
+    if (
+        learned_novel_target_recall is not None
+        and novel_context_old_target_acc is not None
+    ):
+        return (
+            alpha * learned_novel_target_recall
+            + (1 - alpha) * novel_context_old_target_acc
+        )
+
+    if learned_novel_target_recall is not None:
+        return learned_novel_target_recall
+
+    if novel_context_old_target_acc is not None:
+        return novel_context_old_target_acc
+
+    return None

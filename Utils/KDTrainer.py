@@ -402,6 +402,7 @@ def evaluate_adaptation(
 
 
 # Phase-level functions
+# Phase-level functions
 def run_adaptation_phase(
     student: nn.Module,
     student_loader,
@@ -417,24 +418,36 @@ def run_adaptation_phase(
 ):
     history = []
 
+    # Print the adaptation mode
     if verbose:
         if full_finetune_ce_only:
-            print("[Update Mode] full-parameter CE finetuning on D_novel")
+            print(
+                "[Adaptation] Mode: full-parameter CE fine-tuning on D_novel."
+            )
         else:
-            print("[Update Mode] adaptation (partial trainable) on D_novel")
+            print(
+                "[Adaptation] Mode: partial-parameter CE training on D_novel."
+            )
 
+    # Split D_novel into training and validation sets
     adaptation_train_loader, adaptation_val_loader = make_train_val_loader(
         student_loader,
         val_ratio=adaptation_val_ratio,
         shuffle_train=True,
     )
 
+    # Case 1: no validation set can be created
     if adaptation_val_loader is None:
 
         if verbose:
             print(
-                f"[Adaptation] validation split skipped; "
-                f"using all {len(adaptation_train_loader.dataset)} samples for training"
+                f"[Adaptation] Validation split skipped | "
+                f"train={len(adaptation_train_loader.dataset)}."
+            )
+            print(
+                f"[Adaptation] Started | "
+                f"epochs={adaptation_epochs} | "
+                f"validation=disabled."
             )
 
         for epoch in range(1, adaptation_epochs + 1):
@@ -456,25 +469,38 @@ def run_adaptation_phase(
 
             history.append(stats)
 
-            if verbose:
+        if verbose:
+            final_loss = history[-1]["ce_loss"] if history else None
+
+            if final_loss is not None:
                 print(
-                    f"[Phase1-CE] epoch={epoch:03d} "
-                    f"train_ce={stats['ce_loss']:.4f} "
-                    f"n_train={stats['n_samples']}"
+                    f"[Adaptation] Completed | "
+                    f"epochs={len(history)} | "
+                    f"final_train_loss={final_loss:.4f}."
                 )
+            else:
+                print("[Adaptation] Completed | no training epochs executed.")
 
         return student, history
 
+    # Case 2: training and validation sets are available
     if verbose:
         print(
-            f"[Adaptation] split dataset: "
-            f"train={len(adaptation_train_loader.dataset)} "
-            f"val={len(adaptation_val_loader.dataset)}"
+            f"[Adaptation] Data split: "
+            f"train={len(adaptation_train_loader.dataset)} | "
+            f"val={len(adaptation_val_loader.dataset)}."
+        )
+        print(
+            f"[Adaptation] Started | "
+            f"max_epochs={adaptation_epochs} | "
+            f"patience={adaptation_patience}."
         )
 
     best_val_loss = float("inf")
     best_state = None
+    best_epoch = None
     bad_epochs = 0
+    stopped_early = False
 
     for epoch in range(1, adaptation_epochs + 1):
         if full_finetune_ce_only:
@@ -503,40 +529,54 @@ def run_adaptation_phase(
         history.append(stats)
 
         current_val_loss = val_stats["val_ce_loss"]
-        improved = current_val_loss < (best_val_loss - adaptation_min_delta)
+        improved = current_val_loss < (
+            best_val_loss - adaptation_min_delta
+        )
 
         if improved:
             best_val_loss = current_val_loss
+            best_epoch = epoch
+
             best_state = {
                 k: v.detach().cpu().clone()
                 for k, v in student.state_dict().items()
             }
+
             bad_epochs = 0
         else:
             bad_epochs += 1
 
-        if verbose:
-            print(
-                f"[Phase1-CE] epoch={epoch:03d} "
-                f"train_ce={train_stats['ce_loss']:.4f} "
-                f"val_ce={val_stats['val_ce_loss']:.4f} "
-                f"val_acc={val_stats['val_acc']:.4f} "
-                f"bad={bad_epochs}/{adaptation_patience}"
-            )
-
         if bad_epochs >= adaptation_patience:
+            stopped_early = True
+
             if verbose:
                 print(
-                    f"[Adaptation] early stopping at epoch={epoch:03d}; "
-                    f"best_val_ce={best_val_loss:.4f}"
+                    f"[Adaptation] Early stopping at epoch {epoch} | "
+                    f"best_epoch={best_epoch} | "
+                    f"best_val_loss={best_val_loss:.4f}."
                 )
+
             break
 
+    # Restore the model with the lowest validation loss
     if best_state is not None:
         student.load_state_dict(best_state)
         student = student.to(device)
-        if verbose:
-            print(f"[Adaptation] restored best model with val_ce={best_val_loss:.4f}")
+
+    if verbose:
+        completed_epochs = len(history)
+
+        if stopped_early:
+            print(
+                f"[Adaptation] Completed | "
+                f"epochs={completed_epochs} | "
+                f"restored_epoch={best_epoch} | "
+                f"best_val_loss={best_val_loss:.4f}."
+            )
+        else:
+            print(
+                f"[Adaptation] Completed | "
+            )
 
     return student, history
 
@@ -556,6 +596,19 @@ def run_stable_kd_phase(
     history = []
 
     set_distillation_trainable(student)
+
+    stable_n = (
+        len(stable_student_loader.dataset)
+        if stable_student_loader is not None
+        else 0
+    )
+
+    if verbose:
+        print(
+            f"[Distillation] Started | "
+            f"samples={stable_n} | "
+            f"epochs={kd_epochs} | "
+        )
 
     for epoch in range(1, kd_epochs + 1):
         student, stable_stats = train_stable_kd_epoch(
@@ -578,14 +631,10 @@ def run_stable_kd_phase(
         }
         history.append(stats)
 
-        if verbose:
-            print(
-                f"[KD Train] epoch={epoch:03d} | "
-                f"stable: ce={stats['stable_ce_loss']:.4f} "
-                f"kd={stats['stable_kd_loss']:.4f} "
-                f"total={stats['stable_total_loss']:.4f} "
-                f"n={stats['stable_n']}"
-            )
+    if verbose:
+        print(
+            f"[Distillation] Completed "
+        )
 
     return student, history
 
@@ -672,7 +721,7 @@ def incremental_kd_update(
         )
     else:
         if verbose:
-            print("[KD Train] skipped")
+            print("[Distillation] Skipped.")
         distillation_history = []
 
     history = {

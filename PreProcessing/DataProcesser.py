@@ -34,7 +34,7 @@ class LogsDataProcessor:
         """
         # Load CSV file if it exists, otherwise load XES file
         if os.path.exists(self._filepath):
-            df = pd.read_csv(self._filepath)
+            df = pd.read_csv(self._filepath, low_memory=False)
         else:
             self._filepath = f"{self._dir_path}/{self._name}/{self._name}.xes"
             event_log = pm4py.read_xes(self._filepath)

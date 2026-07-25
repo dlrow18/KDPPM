@@ -185,7 +185,7 @@ def train_model(model, dataloader, epochs=100, lr=0.002, patience=10, device=Non
         print(f"Epoch {epoch:03d} | train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_acc={val_acc:.4f}")
 
         if bad >= patience:
-            print(f"Early stopping. Best val_loss={best_val:.4f}")
+            print(f"Early stopping. Best_val_loss={best_val:.4f}")
             break
 
     if best_state is not None:

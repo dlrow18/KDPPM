@@ -7,7 +7,7 @@ from PreProcessing.LogsDataLoader import LogsDataLoader
 from Model.LSTMClassifier import LSTMClassifier, train_model, predict_model, compute_prf1_weighted_sklearn
 from Utils.NewDriftDetector import PageHinkleyDriftDetector, NoveltyBufferManager, DriftDetector
 from Utils.OnlineUpdate import perform_incremental_update
-from Utils.OnlineEvalMetrics import compute_unseen_event_ratio_like_detector, compute_novel_event_decomposition, subset_metrics, overall_subset_metrics, build_unseen_event_eval_masks
+from Utils.OnlineEvalMetrics import compute_unseen_event_ratio_like_detector, compute_novel_event_decomposition, subset_metrics, overall_subset_metrics, build_unseen_event_eval_masks, compute_uhs
 from Utils.ExperimentIO import save_window_metrics_to_excel, save_checkpoint_and_vocab, build_window_record, build_overall_record
 
 
@@ -16,6 +16,11 @@ def format_seconds(seconds: float) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+def format_optional_metric(value, percentage=False):
+    if value is None:
+        return "N/A"
+    return f"{value * 100:.2f}%" if percentage else f"{value:.4f}"
 
 
 def main():
@@ -128,6 +133,8 @@ def main():
 
 
     # Train
+    print("\n[Pretraining] Started.")
+
     model, stats = train_model(
         model=model,
         dataloader=train_loader,
@@ -137,18 +144,21 @@ def main():
         device=device,
     )
 
-    print("[Pretraining] finished.")
+    print("[Pretraining] Completed.")
 
     old_token_vocab = copy.deepcopy(loader.vocab_mapper.token_vocab)
     old_label_vocab = copy.deepcopy(loader.vocab_mapper.label_vocab)
 
     learned_novel_events = set()
 
-    print("[Online] prediction and adaptation started.")
-    # Test by fixed time windows
     test_batches = loader.create_batches(test_df)
+
+    print("\n[Online] Started.")
     if args.verbose:
-        print(f"Testing on {len(test_batches)} windows (window_type={args.window_type})")
+        print(
+            f"[Online] Processing {len(test_batches)} windows "
+            f"(window_type={args.window_type})."
+        )
 
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -170,7 +180,7 @@ def main():
 
     for i, (win_key, batch_df) in enumerate(test_batches.items(), start=1):
         if args.verbose:
-            print(f"\n=== Predicting window {i}/{len(test_batches)} - {win_key} ===")
+            print(f"\n=== Predicting window {i}/{len(test_batches)} | {win_key} ===")
 
         known_events_before_window = set(detector.known_train_events)
 
@@ -269,20 +279,20 @@ def main():
         #print(f"[Window {win_key}] n={len(batch_df)}  acc={win_acc * 100:.2f}%")
         if args.verbose:
             print(
-                f"[Window {win_key}] n={len(batch_df)} "
-                f"acc={win_acc * 100:.2f}% | P={win_p * 100:.2f}% | R={win_r * 100:.2f}% | F1={win_f1 * 100:.2f}%"
+                f"[Prediction] n={len(batch_df)} "
+                f"Acc={win_acc * 100:.2f}% | P={win_p * 100:.2f}% | R={win_r * 100:.2f}% | F1={win_f1 * 100:.2f}%"
             )
         if args.verbose:
             print(
-                f"[Unseen Eval] "
-                f"current_unseen_target_n={current_unseen_target_n} "
-                f"ratio={current_unseen_target_ratio:.4f} | "
-                f"learned_novel_target: n={learned_novel_target_metrics['n']} "
-                f"acc={learned_novel_target_metrics['acc']} "
-                f"recall={learned_novel_target_metrics['recall']} "
-                f"f1={learned_novel_target_metrics['f1']} | "
-                f"novel_context_old_target: n={novel_context_old_target_metrics['n']} "
-                f"acc={novel_context_old_target_metrics['acc']}"
+                f"[Unseen Evaluation] "
+                f"learned_unseen_target: "
+                f"n={learned_novel_target_metrics['n']}, "
+                f"acc={format_optional_metric(learned_novel_target_metrics['acc'], True)}, "
+                f"recall={format_optional_metric(learned_novel_target_metrics['recall'], True)}, "
+                f"f1={format_optional_metric(learned_novel_target_metrics['f1'], True)} | "
+                f"learned_unseen_context: "
+                f"n={novel_context_old_target_metrics['n']}, "
+                f"acc={format_optional_metric(novel_context_old_target_metrics['acc'], True)}"
             )
 
         is_triggered, unseen_buffer_df, info = detector.update(win_key, batch_df, win_acc)
@@ -296,7 +306,7 @@ def main():
             unseen_event_ratio = 0.0
 
         if args.verbose:
-            print(f"buffer_total={info['buffer_total']}")
+            print(f"[Buffer] total_samples={info['buffer_total']}")
 
         # Record window-level metrics and info for Excel
 
@@ -326,7 +336,8 @@ def main():
             total_update_count += 1
 
             if args.verbose:
-                print(f"[Drift Detected] reasons={info['trigger_reasons']}")
+                trigger_reasons = ", ".join(info["trigger_reasons"])
+                print(f"[Trigger] Activated | reasons={trigger_reasons}")
 
             (
                 model,
@@ -385,17 +396,19 @@ def main():
             all_novel_context_old_target_gts,
         )
 
-        # calculate UHS
-        learned_novel_target_recall = overall_learned_novel_target_metrics["recall"]
-        novel_context_old_target_acc = overall_novel_context_old_target_metrics["acc"]
+        # Calculate UHS
+        learned_novel_target_recall = (
+            overall_learned_novel_target_metrics["recall"]
+        )
+        novel_context_old_target_acc = (
+            overall_novel_context_old_target_metrics["acc"]
+        )
 
-        if learned_novel_target_recall is None or novel_context_old_target_acc is None:
-            overall_uhs = None
-        else:
-            overall_uhs = (
-                    args.uhs_alpha * learned_novel_target_recall
-                    + (1 - args.uhs_alpha) * novel_context_old_target_acc
-            )
+        overall_uhs = compute_uhs(
+            learned_novel_target_recall=learned_novel_target_recall,
+            novel_context_old_target_acc=novel_context_old_target_acc,
+            alpha=args.uhs_alpha,
+        )
 
         if args.verbose:
             print(
@@ -454,6 +467,14 @@ def main():
             out_dir=args.out_dir,
             dataset=args.dataset,
         )
+
+    print(
+        f"[Run] Completed | "
+        f"dataset={args.dataset} | "
+        f"windows={len(test_batches)} | "
+        f"updates={total_update_count} | "
+        f"online_runtime={format_seconds(online_runtime)}."
+    )
 
 if __name__ == "__main__":
     main()
