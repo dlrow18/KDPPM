@@ -5,22 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="19f1aa80-7682-4690-9cc4-16a9adb35a99" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/All_Dataset_Test_MinRatio.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/All_Dataset_Test_MinSamples.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/All_Dataset_Test_PH.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/CalUHS.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/KDTest_PH.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Utils/ExperimentIO.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Utils/OnlineEvalMetrics.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/Utils/OnlineUpdate.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/KDTest.py" beforeDir="false" afterPath="$PROJECT_DIR$/KDTest.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Model/LSTMClassifier.py" beforeDir="false" afterPath="$PROJECT_DIR$/Model/LSTMClassifier.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Utils/DriftDetector.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/Utils/KDPrepare.py" beforeDir="false" afterPath="$PROJECT_DIR$/Utils/KDPrepare.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Utils/KDTrainer.py" beforeDir="false" afterPath="$PROJECT_DIR$/Utils/KDTrainer.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Utils/NewDriftDetector.py" beforeDir="false" afterPath="$PROJECT_DIR$/Utils/NewDriftDetector.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/runs/window_metrics.xlsx" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Baselines/NewActRetrain_predict_all.py" beforeDir="false" afterPath="$PROJECT_DIR$/Baselines/NewActRetrain_predict_all.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -46,14 +32,14 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "Statistics",
-    "last_opened_file_path": "E:/Master/MA/Thesis/5.Expt/Baseline/new",
-    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;last_opened_file_path&quot;: &quot;E:/Master/MA/Code/KDPPM&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
       <recent name="E:\Master\MA\Code\KDPPM\Utils" />
